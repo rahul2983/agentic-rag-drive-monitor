@@ -1,0 +1,29 @@
+# Environment and secrets
+.env
+credentials.json
+token.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+
+# Application data
+app_state.json
+folder_config.json
+daily_summary_*.md
+*.log
+
+# Vector database
+chroma_db/
+simple_db/
+
+# Directories
+logs/
+summaries/
+backups/
+
+# IDE and OS
+.vscode/
+.DS_Store
