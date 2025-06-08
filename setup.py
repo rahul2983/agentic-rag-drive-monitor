@@ -65,23 +65,23 @@ class SimpleSetup:
         """Install required Python packages"""
         print("📦 Installing dependencies...")
         
-        # Updated requirements for Python 3.13 compatibility
+        # Updated requirements for Python 3.13 compatibility - SIMPLIFIED VERSION
         requirements = [
             "google-auth>=2.23.0",
             "google-auth-oauthlib>=1.1.0", 
+            "google-auth-httplib2>=0.1.0",
             "google-api-python-client>=2.100.0",
             "openai>=1.0.0",
-            "sentence-transformers>=2.3.0",
-            "chromadb>=0.4.0",
             "python-docx>=0.8.0",
             "PyPDF2>=3.0.0",
             "openpyxl>=3.1.0",
-            "python-dotenv>=1.0.0",
-            "schedule>=1.2.0",
-            "rich>=13.0.0",
             "aiofiles>=23.0.0",
+            "schedule>=1.2.0",
+            "python-dotenv>=1.0.0",
+            "rich>=13.0.0",
             "pandas>=2.0.0",
-            "numpy>=1.24.0"
+            "numpy>=1.24.0",
+            "scikit-learn>=1.3.0"
         ]
         
         venv_python = self.get_venv_python()
@@ -107,22 +107,6 @@ class SimpleSetup:
                 print(f"❌ Failed to install {package}")
                 print(f"   Error: {e.stderr if e.stderr else e.stdout}")
                 failed_packages.append(package)
-                
-                # Try alternative installation for problematic packages
-                if "sentence-transformers" in package:
-                    print(f"  🔄 Trying alternative installation for sentence-transformers...")
-                    try:
-                        # Try installing with no-deps and then installing dependencies separately
-                        subprocess.run([str(venv_python), "-m", "pip", "install", "torch", "--index-url", "https://download.pytorch.org/whl/cpu"], 
-                                     check=True, capture_output=True)
-                        subprocess.run([str(venv_python), "-m", "pip", "install", "sentence-transformers", "--no-deps"], 
-                                     check=True, capture_output=True)
-                        subprocess.run([str(venv_python), "-m", "pip", "install", "transformers", "tokenizers", "scikit-learn"], 
-                                     check=True, capture_output=True)
-                        print(f"  ✅ Alternative installation successful for sentence-transformers")
-                        failed_packages.remove(package)
-                    except subprocess.CalledProcessError:
-                        print(f"  ❌ Alternative installation also failed")
         
         if failed_packages:
             print(f"\n⚠️  Some packages failed to install: {failed_packages}")
@@ -141,7 +125,7 @@ class SimpleSetup:
         directories = [
             "logs",
             "summaries", 
-            "chroma_db",
+            "simple_db",
             "backups"
         ]
         
@@ -227,7 +211,7 @@ OPENAI_API_KEY={openai_key}
 SCAN_INTERVAL_HOURS={scan_interval}
 DEFAULT_TIMEZONE={timezone}
 LOG_LEVEL=INFO
-VECTOR_DB_PATH=./chroma_db
+VECTOR_DB_PATH=./simple_db
 STATE_FILE_PATH=./app_state.json
 
 # Calendar Settings
@@ -279,13 +263,14 @@ cd "{self.base_dir}"
         
         venv_python = self.get_venv_python()
         
-        # Test imports
+        # Test imports - SIMPLIFIED VERSION (no sentence-transformers or chromadb)
         test_script = """
 try:
     import google.auth
     import openai
-    import chromadb
-    from sentence_transformers import SentenceTransformer
+    import sklearn
+    import pandas
+    import numpy
     print("✅ All imports successful")
 except ImportError as e:
     print(f"❌ Import error: {e}")
@@ -347,7 +332,7 @@ The system will:
 - `folder_config.json` - Your folder selection
 - `app_state.json` - Tracks processed files
 - `drive_monitor.log` - Application logs
-- `chroma_db/` - Vector database for documents
+- `simple_db/` - Simple document database
 
 ## Viewing Results
 
