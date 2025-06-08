@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Scheduler and Configuration Management for Agentic RAG Drive Monitor
-Handles daily scheduling, configuration management, and advanced features.
+Handles weekly scheduling, configuration management, and advanced features.
 """
 
 import os
@@ -31,7 +31,7 @@ class AppConfig:
     google_credentials_path: str
     google_token_path: str
     openai_api_key: str
-    scan_interval_hours: int = 24
+    scan_interval_hours: int = 168  # Default to weekly
     email_notifications: bool = False
     email_host: str = ""
     email_port: int = 587
@@ -40,7 +40,7 @@ class AppConfig:
     email_recipients: List[str] = None
     default_timezone: str = "America/New_York"
     log_level: str = "INFO"
-    vector_db_path: str = "./chroma_db"
+    vector_db_path: str = "./simple_db"  # Updated from chroma_db
     
     def __post_init__(self):
         if self.email_recipients is None:
@@ -64,7 +64,7 @@ class ConfigManager:
             google_credentials_path=os.getenv('GOOGLE_CREDENTIALS_PATH', './credentials.json'),
             google_token_path=os.getenv('GOOGLE_TOKEN_PATH', './token.json'),
             openai_api_key=os.getenv('OPENAI_API_KEY', ''),
-            scan_interval_hours=int(os.getenv('SCAN_INTERVAL_HOURS', '24')),
+            scan_interval_hours=int(os.getenv('SCAN_INTERVAL_HOURS', '168')),  # Default to weekly
             email_notifications=os.getenv('EMAIL_NOTIFICATIONS', 'false').lower() == 'true',
             email_host=os.getenv('EMAIL_HOST', 'smtp.gmail.com'),
             email_port=int(os.getenv('EMAIL_PORT', '587')),
@@ -73,7 +73,7 @@ class ConfigManager:
             email_recipients=email_recipients,
             default_timezone=os.getenv('DEFAULT_TIMEZONE', 'America/New_York'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
-            vector_db_path=os.getenv('VECTOR_DB_PATH', './chroma_db')
+            vector_db_path=os.getenv('VECTOR_DB_PATH', './simple_db')  # Updated from chroma_db
         )
     
     @staticmethod
@@ -96,14 +96,14 @@ class ConfigManager:
         return errors
 
 class EmailNotifier:
-    """Handles email notifications for daily summaries"""
+    """Handles email notifications for weekly summaries"""
     
     def __init__(self, config: AppConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
     
-    async def send_daily_summary(self, summary_content: str, docs: List[DocumentMetadata], actions: List[ActionItem]):
-        """Send formatted daily summary via email"""
+    async def send_weekly_summary(self, summary_content: str, docs: List[DocumentMetadata], actions: List[ActionItem]):
+        """Send formatted weekly summary via email"""
         if not self.config.email_notifications:
             return
         
@@ -113,7 +113,7 @@ class EmailNotifier:
             
             # Setup email message
             msg = MIMEMultipart('alternative')
-            msg['Subject'] = f"Google Drive Daily Summary - {datetime.now().strftime('%Y-%m-%d')}"
+            msg['Subject'] = f"Google Drive Weekly Summary - {datetime.now().strftime('%Y-%m-%d')}"
             msg['From'] = self.config.email_username
             msg['To'] = ', '.join(self.config.email_recipients)
             
@@ -127,7 +127,7 @@ class EmailNotifier:
                 server.login(self.config.email_username, self.config.email_password)
                 server.send_message(msg)
             
-            self.logger.info("Daily summary email sent successfully")
+            self.logger.info("Weekly summary email sent successfully")
             
         except Exception as e:
             self.logger.error(f"Failed to send email summary: {e}")
@@ -158,7 +158,7 @@ class EmailNotifier:
         </head>
         <body>
             <div class="header">
-                <h1>Google Drive Daily Summary</h1>
+                <h1>Google Drive Weekly Summary</h1>
                 <p>{datetime.now().strftime('%B %d, %Y')}</p>
             </div>
             
@@ -250,7 +250,7 @@ class AdvancedScheduler:
                 
                 progress.update(task, advance=20)
                 
-                # Run the daily scan
+                # Run the scan (now weekly by default)
                 await self.app.run_daily_scan()
                 
                 progress.update(task, advance=60)
@@ -278,7 +278,7 @@ class AdvancedScheduler:
     async def send_notifications(self):
         """Send email notifications for the latest scan"""
         try:
-            # Load the latest daily summary
+            # Load the latest summary (now weekly)
             today = datetime.now().strftime('%Y%m%d')
             summary_file = f"daily_summary_{today}.md"
             
@@ -288,7 +288,7 @@ class AdvancedScheduler:
                 
                 # For now, send the markdown content
                 # In a full implementation, we'd reconstruct the document and action lists
-                await self.email_notifier.send_daily_summary(summary_content, [], [])
+                await self.email_notifier.send_weekly_summary(summary_content, [], [])
             
         except Exception as e:
             self.logger.error(f"Failed to send notifications: {e}")
@@ -321,34 +321,56 @@ class AdvancedScheduler:
     
     def setup_schedules(self):
         """Setup various scheduling options"""
+
+        # Weekly schedule (every Monday at 9:00 AM)
+        schedule.every().monday.at("09:00").do(lambda: asyncio.run(self.run_scheduled_scan()))
         
-        # Daily schedule at specified time
-        schedule.every().day.at("09:00").do(lambda: asyncio.run(self.run_scheduled_scan()))
+        # Optional: Additional schedules based on configuration
+        if self.config.scan_interval_hours < 168:  # Less than weekly
+            if self.config.scan_interval_hours >= 24:  # Daily or longer intervals
+                if self.config.scan_interval_hours == 24:
+                    # Daily scans
+                    schedule.every().day.at("09:00").do(lambda: asyncio.run(self.run_scheduled_scan()))
+                elif self.config.scan_interval_hours == 72:
+                    # Every 3 days
+                    schedule.every(3).days.at("09:00").do(lambda: asyncio.run(self.run_scheduled_scan()))
+                else:
+                    # Other multi-day intervals
+                    schedule.every(self.config.scan_interval_hours).hours.do(
+                        lambda: asyncio.run(self.run_scheduled_scan())
+                    )
+            else:
+                # Hourly intervals (less than 24 hours)
+                schedule.every(self.config.scan_interval_hours).hours.do(
+                    lambda: asyncio.run(self.run_scheduled_scan())
+                )
         
-        # Optional: Additional schedules
-        if self.config.scan_interval_hours < 24:
-            schedule.every(self.config.scan_interval_hours).hours.do(
-                lambda: asyncio.run(self.run_scheduled_scan())
-            )
+        # Monthly summary (first Sunday of month at 6 PM)
+        schedule.every().sunday.at("18:00").do(lambda: asyncio.run(self.generate_monthly_summary()))
         
-        # Weekly summary (Sundays at 6 PM)
-        schedule.every().sunday.at("18:00").do(lambda: asyncio.run(self.generate_weekly_summary()))
+        # Determine schedule type for logging
+        if self.config.scan_interval_hours >= 168:
+            schedule_type = "weekly"
+        elif self.config.scan_interval_hours >= 24:
+            schedule_type = f"every {self.config.scan_interval_hours // 24} day(s)"
+        else:
+            schedule_type = f"every {self.config.scan_interval_hours} hour(s)"
         
-        self.logger.info("Schedules configured successfully")
+        self.logger.info(f"Schedules configured successfully - {schedule_type}")
     
-    async def generate_weekly_summary(self):
-        """Generate weekly summary report"""
+    async def generate_monthly_summary(self):
+        """Generate monthly summary report (replaces weekly summary since we're now running weekly)"""
         try:
-            self.logger.info("Generating weekly summary...")
+            self.logger.info("Generating monthly summary...")
             
-            # Load last 7 days of daily summaries
-            weekly_content = f"# Weekly Google Drive Summary\n"
-            weekly_content += f"Week ending: {datetime.now().strftime('%Y-%m-%d')}\n\n"
+            # Load last 30 days of summaries
+            monthly_content = f"# Monthly Google Drive Summary\n"
+            monthly_content += f"Month ending: {datetime.now().strftime('%Y-%m-%d')}\n\n"
             
             total_docs = 0
             total_actions = 0
             
-            for i in range(7):
+            for i in range(30):  # Last 30 days
                 date = datetime.now() - timedelta(days=i)
                 summary_file = f"daily_summary_{date.strftime('%Y%m%d')}.md"
                 
@@ -356,7 +378,6 @@ class AdvancedScheduler:
                     with open(summary_file, 'r') as f:
                         content = f.read()
                         # Parse document and action counts from content
-                        # This is a simplified version - you'd want more robust parsing
                         if "New Documents Processed:" in content:
                             try:
                                 doc_count = int(content.split("New Documents Processed: ")[1].split("\n")[0])
@@ -364,24 +385,24 @@ class AdvancedScheduler:
                             except:
                                 pass
             
-            weekly_content += f"## Weekly Statistics\n"
-            weekly_content += f"- Total Documents Processed: {total_docs}\n"
-            weekly_content += f"- Total Action Items Created: {total_actions}\n\n"
+            monthly_content += f"## Monthly Statistics\n"
+            monthly_content += f"- Total Documents Processed: {total_docs}\n"
+            monthly_content += f"- Total Action Items Created: {total_actions}\n\n"
             
-            # Save weekly summary
-            weekly_file = f"weekly_summary_{datetime.now().strftime('%Y_W%U')}.md"
-            with open(weekly_file, 'w') as f:
-                f.write(weekly_content)
+            # Save monthly summary
+            monthly_file = f"monthly_summary_{datetime.now().strftime('%Y_%m')}.md"
+            with open(monthly_file, 'w') as f:
+                f.write(monthly_content)
             
-            self.logger.info(f"Weekly summary saved to {weekly_file}")
+            self.logger.info(f"Monthly summary saved to {monthly_file}")
             
         except Exception as e:
-            self.logger.error(f"Failed to generate weekly summary: {e}")
+            self.logger.error(f"Failed to generate monthly summary: {e}")
     
     def display_status_table(self):
         """Display current status in a nice table"""
         table = Table(title="Agentic RAG Monitor Status")
-        
+    
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="green")
         
@@ -389,6 +410,18 @@ class AdvancedScheduler:
         table.add_row("Total Runs", str(self.run_count))
         table.add_row("Last Run", self.last_run.strftime('%Y-%m-%d %H:%M:%S') if self.last_run else "Never")
         table.add_row("Next Run", schedule.next_run().strftime('%Y-%m-%d %H:%M:%S') if schedule.jobs else "Not scheduled")
+        
+        # Enhanced schedule display
+        if self.config.scan_interval_hours >= 168:
+            schedule_text = "Weekly (Mondays at 9 AM)"
+        elif self.config.scan_interval_hours >= 24:
+            days = self.config.scan_interval_hours // 24
+            schedule_text = f"Every {days} day{'s' if days > 1 else ''} at 9 AM"
+        else:
+            schedule_text = f"Every {self.config.scan_interval_hours} hours"
+        
+        table.add_row("Schedule", schedule_text)
+        table.add_row("Scan Window", f"{self.config.scan_interval_hours} hours" if self.config.scan_interval_hours < 168 else "7 days (weekly)")
         table.add_row("Email Notifications", "✅ Enabled" if self.config.email_notifications else "❌ Disabled")
         
         self.console.print(table)
@@ -488,7 +521,7 @@ def main():
     """Main CLI entry point"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Agentic RAG Drive Monitor")
+    parser = argparse.ArgumentParser(description="Agentic RAG Drive Monitor - Weekly Scheduler")
     parser.add_argument('--mode', choices=['schedule', 'scan', 'stats'], 
                        default='schedule', help='Run mode')
     parser.add_argument('--config', help='Config file path')
