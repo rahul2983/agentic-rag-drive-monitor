@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Agentic RAG Google Drive Monitor
-A comprehensive system for monitoring Google Drive, analyzing documents,
-extracting insights, and taking automated actions.
+Agentic RAG Google Drive Monitor - Simplified Version
+Compatible with Python 3.13 without heavy ML dependencies
 """
 
 import os
@@ -13,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
+import hashlib
 
 # Core dependencies
 import pandas as pd
@@ -22,11 +22,8 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# AI/ML dependencies
+# AI dependencies
 import openai
-from sentence_transformers import SentenceTransformer
-import chromadb
-from chromadb.config import Settings
 
 # Document processing
 import docx
@@ -37,6 +34,10 @@ from openpyxl import load_workbook
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+# Simple text processing
+from sklearn.feature_extraction.text import TfidfVectorizer
+import pickle
 
 @dataclass
 class DocumentMetadata:
@@ -144,24 +145,64 @@ class GoogleDriveMonitor:
             return None
     
     def list_available_folders(self) -> List[Dict[str, str]]:
-        """List all available folders for user selection"""
+        """List all available folders for user selection - Working Method 3 approach"""
         try:
-            query = "mimeType='application/vnd.google-apps.folder' and trashed = False"
+            self.logger.info("Using individual folder lookup method (Method 3)")
             
+            # First, get all folder IDs without names
             results = self.drive_service.files().list(
-                q=query,
-                pageSize=50,
-                fields="files(id, name, parents)",
-                orderBy="name"
+                q="mimeType='application/vnd.google-apps.folder' and trashed = False",
+                pageSize=100,  # Get more folders
+                fields="files(id)"
             ).execute()
             
-            folders = results.get('files', [])
-            self.logger.info(f"Found {len(folders)} folders")
+            folder_ids = [f['id'] for f in results.get('files', [])]
+            self.logger.info(f"Found {len(folder_ids)} folder IDs, looking up individual details...")
             
-            return [{"id": folder["id"], "name": folder["name"]} for folder in folders]
+            valid_folders = []
+            
+            # Look up each folder individually to get the real name
+            for i, folder_id in enumerate(folder_ids):
+                try:
+                    folder_detail = self.drive_service.files().get(
+                        fileId=folder_id,
+                        fields="id, name, parents"
+                    ).execute()
+                    
+                    folder_name = folder_detail.get('name', '')
+                    
+                    # Only include folders with valid names
+                    if folder_name and folder_name != '0' and len(folder_name.strip()) > 0:
+                        valid_folders.append({
+                            "id": folder_id, 
+                            "name": folder_name.strip()
+                        })
+                        self.logger.debug(f"Found folder: {folder_name}")
+                    else:
+                        self.logger.debug(f"Skipped folder with invalid name: '{folder_name}'")
+                        
+                except Exception as e:
+                    self.logger.warning(f"Could not get details for folder {folder_id[:10]}...: {e}")
+                    continue
+            
+            # Sort folders alphabetically by name
+            valid_folders.sort(key=lambda x: x['name'].lower())
+            
+            self.logger.info(f"Successfully retrieved {len(valid_folders)} valid folders")
+            return valid_folders
             
         except HttpError as error:
             self.logger.error(f"Error listing folders: {error}")
+            return []
+    
+    def list_folders_alternative(self) -> List[Dict[str, str]]:
+        """Alternative method - not needed anymore, but keeping as backup"""
+        try:
+            # This method is now redundant since we fixed the main method
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"Alternative folder listing failed: {e}")
             return []
     
     def get_recent_files(self, hours_back: int = 24, folder_id: str = None) -> List[Dict[str, Any]]:
@@ -261,26 +302,25 @@ class GoogleDriveMonitor:
             self.logger.error(f"Error downloading file {file_id}: {error}")
             return f"Error downloading file: {error}"
 
-class DocumentAnalyzer:
-    """AI-powered document analysis and insight extraction"""
+class SimpleDocumentAnalyzer:
+    """Simplified document analysis without heavy ML dependencies"""
     
     def __init__(self, openai_api_key: str):
-        import openai
         self.client = openai.OpenAI(api_key=openai_api_key)
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.setup_vector_store()
+        self.setup_simple_storage()
         
-    def setup_vector_store(self):
-        """Initialize ChromaDB for document embeddings"""
-        self.chroma_client = chromadb.Client(Settings(
-            chroma_db_impl="duckdb+parquet",
-            persist_directory="./chroma_db"
-        ))
+    def setup_simple_storage(self):
+        """Initialize simple file-based storage instead of vector DB"""
+        self.storage_dir = Path("./simple_db")
+        self.storage_dir.mkdir(exist_ok=True)
+        self.documents_file = self.storage_dir / "documents.json"
         
-        try:
-            self.collection = self.chroma_client.get_collection("documents")
-        except:
-            self.collection = self.chroma_client.create_collection("documents")
+        # Load existing documents
+        if self.documents_file.exists():
+            with open(self.documents_file, 'r') as f:
+                self.stored_documents = json.load(f)
+        else:
+            self.stored_documents = {}
     
     async def analyze_document(self, content: str, metadata: DocumentMetadata) -> DocumentMetadata:
         """Analyze document content and extract insights"""
@@ -297,8 +337,8 @@ class DocumentAnalyzer:
         # Determine priority
         metadata.priority = await self.assess_priority(content, summary)
         
-        # Store in vector database
-        self.store_document_embedding(content, metadata)
+        # Store in simple storage
+        self.store_document_simple(content, metadata)
         
         return metadata
     
@@ -394,22 +434,27 @@ class DocumentAnalyzer:
             logging.error(f"Error assessing priority: {e}")
             return 'medium'
     
-    def store_document_embedding(self, content: str, metadata: DocumentMetadata):
-        """Store document embedding in vector database"""
+    def store_document_simple(self, content: str, metadata: DocumentMetadata):
+        """Store document in simple file-based storage"""
         try:
-            # Generate embedding
-            embedding = self.embedding_model.encode(content)
+            # Create document hash for unique identification
+            content_hash = hashlib.md5(content.encode()).hexdigest()
             
-            # Store in ChromaDB
-            self.collection.add(
-                embeddings=[embedding.tolist()],
-                documents=[content[:1000]],  # Store first 1000 chars
-                metadatas=[asdict(metadata)],
-                ids=[metadata.file_id]
-            )
+            document_entry = {
+                "metadata": asdict(metadata),
+                "content_preview": content[:500],  # Store first 500 chars
+                "content_hash": content_hash,
+                "stored_at": datetime.now().isoformat()
+            }
+            
+            self.stored_documents[metadata.file_id] = document_entry
+            
+            # Save to file
+            with open(self.documents_file, 'w') as f:
+                json.dump(self.stored_documents, f, indent=2)
             
         except Exception as e:
-            logging.error(f"Error storing embedding: {e}")
+            logging.error(f"Error storing document: {e}")
 
 class CalendarManager:
     """Manage calendar events and scheduling"""
@@ -417,45 +462,199 @@ class CalendarManager:
     def __init__(self, calendar_service):
         self.calendar_service = calendar_service
         self.logger = logging.getLogger(__name__)
+        self.scheduled_times = []  # Track scheduled times to avoid conflicts
+    
+    def parse_due_date_from_description(self, description: str) -> Optional[datetime]:
+        """Extract due date from action item description"""
+        import re
+        
+        # Common date patterns
+        date_patterns = [
+            r'by\s+(\w+\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s+\d{4})?)',  # "by December 20th, 2024"
+            r'(\w+\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s+\d{4})?)',       # "December 20th, 2024"
+            r'(\d{1,2}/\d{1,2}/\d{4})',                             # "12/20/2024"
+            r'(\d{4}-\d{2}-\d{2})',                                 # "2024-12-20"
+        ]
+        
+        for pattern in date_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                date_str = match.group(1)
+                try:
+                    # Try to parse various date formats
+                    from dateutil import parser
+                    parsed_date = parser.parse(date_str, fuzzy=True)
+                    
+                    # If no year specified, assume current year or next year if date has passed
+                    if parsed_date.year == 1900:  # Default year from parser
+                        current_year = datetime.now().year
+                        parsed_date = parsed_date.replace(year=current_year)
+                        
+                        # If the date is in the past, move to next year
+                        if parsed_date < datetime.now():
+                            parsed_date = parsed_date.replace(year=current_year + 1)
+                    
+                    return parsed_date
+                except:
+                    continue
+        
+        return None
+    
+    def get_next_available_slot(self, preferred_date: datetime, priority: str) -> datetime:
+        """Get next available time slot, avoiding conflicts"""
+        
+        # Priority-based time slots
+        if priority == "high":
+            # High priority: Morning slots (9 AM - 12 PM)
+            base_hours = [9, 10, 11]
+        elif priority == "medium":
+            # Medium priority: Afternoon slots (1 PM - 4 PM)
+            base_hours = [13, 14, 15]
+        else:
+            # Low priority: End of day slots (4 PM - 6 PM)
+            base_hours = [16, 17]
+        
+        # Start from preferred date
+        current_date = preferred_date.replace(hour=base_hours[0], minute=0, second=0, microsecond=0)
+        
+        # Try to find an available slot within 14 days
+        for day_offset in range(14):
+            check_date = current_date + timedelta(days=day_offset)
+            
+            # Skip weekends for work-related tasks
+            if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
+                continue
+            
+            # Try each hour slot for this priority level
+            for hour in base_hours:
+                candidate_time = check_date.replace(hour=hour)
+                
+                # Check if this slot is already taken (within 30 minutes)
+                is_available = True
+                for scheduled_time in self.scheduled_times:
+                    time_diff = abs((candidate_time - scheduled_time).total_seconds())
+                    if time_diff < 1800:  # 30 minutes = 1800 seconds
+                        is_available = False
+                        break
+                
+                if is_available:
+                    self.scheduled_times.append(candidate_time)
+                    return candidate_time
+        
+        # If no slot found, just add to the end
+        fallback_time = current_date + timedelta(days=len(self.scheduled_times) // 3)
+        self.scheduled_times.append(fallback_time)
+        return fallback_time
+    
+    def determine_event_duration(self, description: str, priority: str) -> int:
+        """Determine event duration based on action type and priority"""
+        
+        # Keywords that suggest longer meetings
+        long_meeting_keywords = [
+            'meeting', 'presentation', 'review', 'discussion', 'training',
+            'session', 'workshop', 'interview', 'negotiation'
+        ]
+        
+        # Keywords that suggest shorter tasks
+        short_task_keywords = [
+            'submit', 'send', 'call', 'email', 'update', 'change',
+            'check', 'verify', 'approve', 'sign'
+        ]
+        
+        description_lower = description.lower()
+        
+        # Check for meeting-type activities
+        if any(keyword in description_lower for keyword in long_meeting_keywords):
+            return 2 if priority == "high" else 1  # 2 hours for high priority meetings, 1 for others
+        
+        # Check for quick tasks
+        elif any(keyword in description_lower for keyword in short_task_keywords):
+            return 1  # 30 minutes for quick tasks
+        
+        # Default duration based on priority
+        elif priority == "high":
+            return 1  # 1 hour for high priority items
+        else:
+            return 1  # 30 minutes for medium/low priority
     
     async def create_calendar_event(self, action_item: ActionItem) -> Optional[str]:
-        """Create calendar event for action item"""
+        """Create calendar event for action item with intelligent scheduling"""
         try:
-            # Parse due date or set default
-            if action_item.due_date:
-                try:
-                    due_date = datetime.fromisoformat(action_item.due_date)
-                except:
-                    due_date = datetime.now() + timedelta(days=1)
-            else:
-                due_date = datetime.now() + timedelta(days=1)
+            # Try to extract due date from description
+            extracted_due_date = self.parse_due_date_from_description(action_item.description)
             
-            # Create event
+            # Determine the target date
+            if extracted_due_date:
+                # Schedule a few days before the due date for preparation
+                if action_item.priority == "high":
+                    target_date = extracted_due_date - timedelta(days=1)  # 1 day before for urgent items
+                else:
+                    target_date = extracted_due_date - timedelta(days=3)  # 3 days before for others
+                
+                # Don't schedule in the past
+                if target_date < datetime.now():
+                    target_date = datetime.now() + timedelta(days=1)
+            else:
+                # No specific due date found, schedule based on priority
+                if action_item.priority == "high":
+                    target_date = datetime.now() + timedelta(days=1)      # Tomorrow for high priority
+                elif action_item.priority == "medium":
+                    target_date = datetime.now() + timedelta(days=2)      # Day after tomorrow for medium
+                else:
+                    target_date = datetime.now() + timedelta(days=3)      # 3 days for low priority
+            
+            # Get next available time slot
+            scheduled_time = self.get_next_available_slot(target_date, action_item.priority)
+            
+            # Determine event duration
+            duration_hours = self.determine_event_duration(action_item.description, action_item.priority)
+            
+            # Create event with better formatting
+            event_title = f"📋 {action_item.description[:50]}{'...' if len(action_item.description) > 50 else ''}"
+            
+            # Add priority emoji
+            priority_emoji = {"high": "🚨", "medium": "⚠️", "low": "📝"}
+            
+            event_description = f"""{priority_emoji.get(action_item.priority, '📝')} Priority: {action_item.priority.upper()}
+
+📄 Source: {action_item.source_document}
+
+📋 Full Description: {action_item.description}
+
+🤖 Auto-generated by Agentic RAG Drive Monitor"""
+            
+            # Handle due date display
+            due_date_text = ""
+            if extracted_due_date:
+                due_date_text = f"\n⏰ Due Date: {extracted_due_date.strftime('%B %d, %Y')}"
+                event_description += due_date_text
+            
             event = {
-                'summary': f"Action: {action_item.description}",
-                'description': f"Source: {action_item.source_document}\nPriority: {action_item.priority}",
+                'summary': event_title,
+                'description': event_description,
                 'start': {
-                    'dateTime': due_date.isoformat(),
-                    'timeZone': 'America/New_York',  # Adjust as needed
+                    'dateTime': scheduled_time.isoformat(),
+                    'timeZone': 'America/New_York',
                 },
                 'end': {
-                    'dateTime': (due_date + timedelta(hours=1)).isoformat(),
+                    'dateTime': (scheduled_time + timedelta(hours=duration_hours)).isoformat(),
                     'timeZone': 'America/New_York',
                 },
                 'reminders': {
                     'useDefault': False,
                     'overrides': [
-                        {'method': 'email', 'minutes': 24 * 60},  # 1 day before
-                        {'method': 'popup', 'minutes': 60}        # 1 hour before
+                        {'method': 'email', 'minutes': 24 * 60 if action_item.priority == 'high' else 60},
+                        {'method': 'popup', 'minutes': 15}
                     ]
-                }
+                },
+                'colorId': '11' if action_item.priority == 'high' else '5' if action_item.priority == 'medium' else '2'  # Red for high, yellow for medium, green for low
             }
             
             created_event = self.calendar_service.events().insert(
                 calendarId='primary', body=event
             ).execute()
             
-            self.logger.info(f"Created calendar event: {created_event['id']}")
+            self.logger.info(f"Created calendar event for {action_item.priority} priority: {action_item.description[:30]}... on {scheduled_time.strftime('%m/%d %H:%M')}")
             return created_event['id']
             
         except Exception as e:
@@ -463,7 +662,7 @@ class CalendarManager:
             return None
 
 class AgenticRAGApplication:
-    """Main Agentic RAG application orchestrator"""
+    """Main Agentic RAG application orchestrator - Simplified Version"""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -471,7 +670,7 @@ class AgenticRAGApplication:
             config['google_credentials_path'],
             config['google_token_path']
         )
-        self.doc_analyzer = DocumentAnalyzer(config['openai_api_key'])
+        self.doc_analyzer = SimpleDocumentAnalyzer(config['openai_api_key'])
         self.logger = logging.getLogger(__name__)
         
         # Folder monitoring configuration
@@ -520,9 +719,15 @@ class AgenticRAGApplication:
             print("❌ No folders found in your Google Drive")
             return
         
+        # Debug: Print raw folder data
+        print(f"Debug: Retrieved {len(folders)} folders")
+        for i, folder in enumerate(folders[:3]):
+            print(f"Debug folder {i}: {folder}")
+        
         # Display folders with numbers
         for i, folder in enumerate(folders, 1):
-            print(f"{i:2d}. {folder['name']}")
+            folder_name = folder.get('name', 'Unknown Folder')
+            print(f"{i:2d}. {folder_name}")
         
         print(f"{len(folders) + 1:2d}. Monitor entire Google Drive")
         
@@ -534,7 +739,7 @@ class AgenticRAGApplication:
                 if 1 <= choice_num <= len(folders):
                     selected_folder = folders[choice_num - 1]
                     self.target_folder_id = selected_folder['id']
-                    self.target_folder_name = selected_folder['name']
+                    self.target_folder_name = selected_folder.get('name', 'Unknown Folder')
                     
                     # Ask about subfolders
                     include_sub = input(f"Include subfolders? (y/n): ").strip().lower()
@@ -676,6 +881,8 @@ class AgenticRAGApplication:
         # Save state
         self.save_state()
         
+        self.logger.info("Daily scan completed successfully")
+    
     def load_state(self):
         """Load previous state from disk"""
         state_file = Path('app_state.json')
@@ -760,7 +967,7 @@ def main():
     """Main entry point with setup mode"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Agentic RAG Drive Monitor")
+    parser = argparse.ArgumentParser(description="Agentic RAG Drive Monitor - Simple Version")
     parser.add_argument('--mode', choices=['setup', 'scan', 'schedule'], 
                        default='scan', help='Run mode')
     
@@ -802,7 +1009,7 @@ def main():
         
         print("\n✅ Setup complete!")
         print("You can now run:")
-        print("  python main.py --mode=scan      # Manual scan")
+        print("  python main-simple.py --mode=scan      # Manual scan")
         print("  python scheduler.py --mode=schedule  # Start daily monitoring")
         
     elif args.mode == 'scan':
@@ -811,11 +1018,16 @@ def main():
         
     elif args.mode == 'schedule':
         # Import and run scheduler
-        from scheduler import AdvancedScheduler, ConfigManager
-        
-        config_obj = ConfigManager.load_config()
-        scheduler = AdvancedScheduler(config_obj)
-        scheduler.run_scheduler()
+        try:
+            from scheduler import AdvancedScheduler, ConfigManager
+            
+            config_obj = ConfigManager.load_config()
+            scheduler = AdvancedScheduler(config_obj)
+            scheduler.run_scheduler()
+        except ImportError:
+            print("❌ Scheduler module not found or has dependency issues")
+            print("   Running in simple scan mode instead...")
+            asyncio.run(app.run_daily_scan())
 
 if __name__ == "__main__":
     main()
