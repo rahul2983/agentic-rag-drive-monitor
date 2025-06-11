@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fixed AI Analysis Server
+Working AI Analysis Server with proper initialization
 """
 
 import asyncio
@@ -21,21 +21,31 @@ from mcp.types import (
     ListToolsRequest, ListToolsResult
 )
 
-import openai
+# Optional: Import OpenAI if available
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 class AIAnalysisServer:
     def __init__(self):
         self.server = Server("ai-analysis")
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
-        self.client = openai.OpenAI(api_key=api_key)
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize OpenAI client if available
+        self.openai_client = None
+        if OPENAI_AVAILABLE:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if api_key:
+                self.openai_client = openai.OpenAI(api_key=api_key)
+        
         self.setup_handlers()
     
     def setup_handlers(self):
         @self.server.list_tools()
         async def handle_list_tools() -> ListToolsResult:
+            """Return tools for AI analysis operations"""
             tools = [
                 Tool(
                     name="analyze_document",
@@ -43,8 +53,8 @@ class AIAnalysisServer:
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "content": {"type": "string", "description": "Document content"},
-                            "document_name": {"type": "string", "description": "Document name"}
+                            "content": {"type": "string", "description": "Document content to analyze"},
+                            "document_name": {"type": "string", "description": "Name of the document"}
                         },
                         "required": ["content", "document_name"]
                     }
@@ -55,7 +65,8 @@ class AIAnalysisServer:
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "content": {"type": "string", "description": "Content to summarize"}
+                            "content": {"type": "string", "description": "Content to summarize"},
+                            "max_length": {"type": "integer", "description": "Maximum summary length", "default": 150}
                         },
                         "required": ["content"]
                     }
@@ -65,6 +76,7 @@ class AIAnalysisServer:
         
         @self.server.call_tool()
         async def handle_call_tool(request: CallToolRequest) -> CallToolResult:
+            """Handle tool calls"""
             try:
                 if request.name == "analyze_document":
                     return await self._analyze_document(request.arguments)
@@ -73,62 +85,100 @@ class AIAnalysisServer:
                 else:
                     raise ValueError(f"Unknown tool: {request.name}")
             except Exception as e:
+                self.logger.error(f"Tool call error: {e}")
                 return CallToolResult(
                     content=[TextContent(type="text", text=f"Error: {str(e)}")],
                     isError=True
                 )
     
     async def _analyze_document(self, args) -> CallToolResult:
+        """Analyze a document"""
+        content = args.get("content", "")
+        document_name = args.get("document_name", "Unknown Document")
+        
+        # Basic analysis (can be enhanced with real AI)
+        word_count = len(content.split())
+        char_count = len(content)
+        
         result = {
-            "document_name": args["document_name"],
-            "summary": f"Analysis of {args['document_name']}",
-            "action_items": ["Review document", "Follow up"],
-            "priority": "medium",
-            "analyzed_at": datetime.now().isoformat()
+            "document_name": document_name,
+            "analysis": {
+                "word_count": word_count,
+                "character_count": char_count,
+                "estimated_reading_time": f"{max(1, word_count // 200)} minutes"
+            },
+            "summary": f"Document '{document_name}' contains {word_count} words",
+            "action_items": ["Review document content", "Extract key points"],
+            "priority": "medium" if word_count > 500 else "low",
+            "analyzed_at": datetime.now().isoformat(),
+            "ai_available": self.openai_client is not None
         }
+        
         return CallToolResult(
             content=[TextContent(type="text", text=json.dumps(result, indent=2))]
         )
     
     async def _generate_summary(self, args) -> CallToolResult:
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": f"Summarize: {args['content'][:1000]}"}],
-                max_tokens=150,
-                temperature=0.3
-            )
-            summary = response.choices[0].message.content.strip()
-            result = {"summary": summary, "word_count": len(summary.split())}
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, indent=2))]
-            )
-        except Exception as e:
-            return CallToolResult(
-                content=[TextContent(type="text", text=f"Summary failed: {str(e)}")],
-                isError=True
-            )
+        """Generate a summary"""
+        content = args.get("content", "")
+        max_length = args.get("max_length", 150)
+        
+        if self.openai_client:
+            try:
+                # Use real AI if available
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "user", "content": f"Summarize this in {max_length} words or less: {content[:2000]}"}
+                    ],
+                    max_tokens=max_length,
+                    temperature=0.3
+                )
+                summary = response.choices[0].message.content.strip()
+                method = "OpenAI GPT-3.5"
+            except Exception as e:
+                # Fallback to simple summary
+                summary = f"Summary of {len(content.split())} word document: {content[:max_length]}..."
+                method = f"Fallback (OpenAI error: {str(e)})"
+        else:
+            # Simple extractive summary
+            sentences = content.split('. ')
+            summary = '. '.join(sentences[:3]) + "..." if len(sentences) > 3 else content
+            method = "Simple extractive"
+        
+        result = {
+            "summary": summary,
+            "method": method,
+            "word_count": len(summary.split()),
+            "original_length": len(content.split()),
+            "compression_ratio": f"{len(summary.split()) / max(1, len(content.split())):.2f}"
+        }
+        
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(result, indent=2))]
+        )
 
 async def main():
+    """Main server entry point"""
     logging.basicConfig(level=logging.INFO)
-    if not os.getenv("OPENAI_API_KEY"):
-        logging.error("OPENAI_API_KEY environment variable is required")
-        return
     
-    ai_server = AIAnalysisServer()
+    server_instance = AIAnalysisServer()
+    
+    # Proper initialization
+    initialization_options = InitializationOptions(
+        server_name="ai-analysis",
+        server_version="1.0.0",
+        capabilities=server_instance.server.get_capabilities(
+            notification_options=NotificationOptions(),
+            experimental_capabilities={}
+        )
+    )
     
     async with stdio_server() as (read_stream, write_stream):
-        await ai_server.server.run(
+        await server_instance.server.run(
             read_stream,
             write_stream,
-            InitializationOptions(
-                server_name="ai-analysis",
-                server_version="1.0.0",
-                capabilities=ai_server.server.get_capabilities(
-                    notification_options=NotificationOptions(),
-                    experimental_capabilities={}
-                )
-            )
+            initialization_options
         )
 
 if __name__ == "__main__":
