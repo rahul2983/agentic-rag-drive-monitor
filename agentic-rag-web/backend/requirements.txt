@@ -3,25 +3,40 @@ fastapi==0.115.9
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 
-# Database (SQLite - no compilation needed!)
-sqlalchemy==2.0.23
+# Database (SQLite - Python 3.13 Compatible!)
+sqlalchemy>=2.0.25
 
 # Authentication & Security
 python-jose[cryptography]==3.3.0
+PyJWT>=2.8.0
 passlib[bcrypt]==1.7.4
 
-# Your Original Dependencies
+# Google Services Integration
 google-auth>=2.23.0
 google-auth-oauthlib>=1.1.0
 google-api-python-client>=2.100.0
+
+# AI/ML Dependencies
 openai>=1.0.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+
+# Document Processing
 python-docx>=0.8.0
 PyPDF2>=3.0.0
 openpyxl>=3.1.0
-python-dotenv>=1.0.0
-pandas>=2.0.0
-scikit-learn>=1.3.0
 
-# Optional: Schedule and async
+# Configuration & Environment
+python-dotenv>=1.0.0
+
+# Async & Scheduling
 schedule>=1.2.0
 aiofiles>=24.1.0
+
+# Additional dependencies that might be needed for agentic RAG
+# (Uncomment if your project uses these)
+# chromadb>=0.4.0
+# langchain>=0.1.0
+# langchain-openai>=0.1.0
+# sentence-transformers>=2.2.0
+# httpx>=0.25.0
