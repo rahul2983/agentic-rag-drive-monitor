@@ -1,0 +1,27 @@
+# Web Framework Dependencies
+fastapi==0.115.9
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Database (SQLite - no compilation needed!)
+sqlalchemy==2.0.23
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Your Original Dependencies
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-api-python-client>=2.100.0
+openai>=1.0.0
+python-docx>=0.8.0
+PyPDF2>=3.0.0
+openpyxl>=3.1.0
+python-dotenv>=1.0.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# Optional: Schedule and async
+schedule>=1.2.0
+aiofiles>=24.1.0
